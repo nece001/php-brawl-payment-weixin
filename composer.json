@@ -1,0 +1,21 @@
+{
+    "name": "nece001/php-brawl-payment-weixin",
+    "description": "php 微信支付基础服务项目",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Nece\\Brawl\\Payment\\Weixin\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "nece001",
+            "email": "nece001@163.com"
+        }
+    ],
+    "require": {
+        "php": ">=7.2",
+        "php-brawl-payment": "^1.0"
+    }
+}
