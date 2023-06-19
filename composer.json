@@ -16,6 +16,6 @@
     ],
     "require": {
         "php": ">=7.2",
-        "php-brawl-payment": "^1.0"
+        "nece001/php-brawl-payment": "^1.0"
     }
 }
