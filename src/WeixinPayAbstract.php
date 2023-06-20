@@ -12,7 +12,7 @@ use WeChatPay\Formatter;
  * @Author nece001@163.com
  * @DateTime 2023-06-19
  */
-abstract class WexinPayAbstract implements PaymentInterface
+abstract class WeixinPayAbstract implements PaymentInterface
 {
 
     /**
@@ -47,8 +47,69 @@ abstract class WexinPayAbstract implements PaymentInterface
     protected $apiclient_key_pem;
     protected $platform_cert_pem;
 
+    protected $pay_notify_url;
+    protected $refund_notify_url;
     protected $http_proxy;
     protected $https_proxy;
+
+    private $raw_response;
+    private $error_message;
+
+    /**
+     * 设置错误消息
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @param string $message
+     *
+     * @return void
+     */
+    protected function setErrorMessage($message)
+    {
+        $this->error_message = $message;
+    }
+
+    /**
+     * 获取错误消息
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @return string
+     */
+    public function getErrorMessage()
+    {
+        return $this->error_message;
+    }
+
+    /**
+     * 设置原始响应
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @param string $content
+     *
+     * @return void
+     */
+    protected function setRawResponse($content)
+    {
+        $this->raw_response = $content;
+    }
+
+    /**
+     * 获取原始响应
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @return string
+     */
+    public function getRawRespnose()
+    {
+        return $this->raw_response;
+    }
 
     /**
      * 构造
@@ -62,10 +123,30 @@ abstract class WexinPayAbstract implements PaymentInterface
     {
         $this->payment = $payment;
 
-        $this->init();
-    }
+        $this->mchid = $this->payment->getConfigValue('mchid');
+        $this->serial = $this->payment->getConfigValue('serial');
+        $this->secret_key = $this->payment->getConfigValue('secret_key');
+        $this->pay_notify_url = $this->payment->getConfigValue('pay_notify_url');
+        $this->refund_notify_url = $this->payment->getConfigValue('refund_notify_url');
+        $this->http_proxy = $this->payment->getConfigValue('http_proxy');
+        $this->https_proxy = $this->payment->getConfigValue('https_proxy');
 
-    abstract protected function init();
+        $apiclient_cert_pem = $this->payment->getConfigValue('apiclient_cert_pem');
+        $apiclient_key_pem = $this->payment->getConfigValue('apiclient_key_pem');
+        $platform_cert_pem = $this->payment->getConfigValue('platform_cert_pem');
+
+        if ($apiclient_cert_pem) {
+            $this->apiclient_cert_pem = file_get_contents($apiclient_cert_pem);
+        }
+
+        if ($apiclient_key_pem) {
+            $this->apiclient_key_pem = file_get_contents($apiclient_key_pem);
+        }
+
+        if ($platform_cert_pem) {
+            $this->platform_cert_pem = file_get_contents($platform_cert_pem);
+        }
+    }
 
     /**
      * 构建签名参数

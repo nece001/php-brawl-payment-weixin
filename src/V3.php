@@ -2,29 +2,17 @@
 
 namespace Nece\Brawl\Payment\Weixin;
 
+use GuzzleHttp\Exception\ClientException;
+use Nece\Brawl\Payment\ParameterAbstract;
 use WeChatPay\Builder;
+use WeChatPay\Crypto\AesGcm;
 use WeChatPay\Crypto\Rsa;
+use WeChatPay\Formatter;
 use WeChatPay\Util\PemUtil;
 
-class V3 extends WexinPayAbstract
+class V3 extends WeixinPayAbstract
 {
     private $client;
-
-    protected function init()
-    {
-        $this->mchid = $this->payment->getConfigValue('mchid');
-        $this->serial = $this->payment->getConfigValue('serial');
-        $this->secret_key = $this->payment->getConfigValue('secret_key');
-        $this->http_proxy = $this->payment->getConfigValue('http_proxy');
-        $this->https_proxy = $this->payment->getConfigValue('https_proxy');
-
-        $apiclient_cert_pem = $this->payment->getConfigValue('apiclient_cert_pem');
-        $apiclient_key_pem = $this->payment->getConfigValue('apiclient_key_pem');
-        $platform_cert_pem = $this->payment->getConfigValue('platform_cert_pem');
-        $this->apiclient_cert_pem = file_get_contents($apiclient_cert_pem);
-        $this->apiclient_key_pem = file_get_contents($apiclient_key_pem);
-        $this->platform_cert_pem = file_get_contents($platform_cert_pem);
-    }
 
     /**
      * 获取客户端
@@ -57,77 +45,205 @@ class V3 extends WexinPayAbstract
     {
     }
 
-    public function refund()
+    public function refund(ParameterAbstract $params)
     {
+        $uri = 'v3/refund/domestic/refunds';
+        $params = $this->buildRefundParamsArray($params);
+
+        try {
+            $response_content = $this->getClient()->chain($uri)->post($params)->getBody()->getContents();
+            $this->setRawResponse($response_content);
+            return json_decode($response_content, true);
+        } catch (ClientException $e) {
+            $response_content = $e->getResponse()->getBody()->getContents();
+            $result = json_decode($response_content, true);
+            $this->setRawResponse($response_content);
+            $this->setErrorMessage($result['message']);
+            throw new \Exception($result['message'], $result['code']);
+        }
     }
 
-    public function notifyDecode($content, $verify = false)
+    public function notifyDecode($content, array $headers, $verify = false)
     {
-    }
+        $inBody = $content;
+        $inWechatpaySignature = $headers["wechatpay-signature"];
+        $inWechatpayTimestamp = $headers["wechatpay-timestamp"];
+        $inWechatpaySerial = $headers["wechatpay-serial"];
+        $inWechatpayNonce = $headers["wechatpay-nonce"];
 
-    private function prepayJsapi()
-    {
-        $uri = '/v3/pay/transactions/jsapi';
-        $params = $this->buildPrepayData($total, $out_trade_no, $description, $attach);
+        $apiv3Key = $this->secret_key; // 在商户平台上设置的APIv3密钥
+
+        if ($verify) {
+
+            // 根据通知的平台证书序列号，查询本地平台证书文件，
+            $platformPublicKeyInstance = Rsa::from($this->apiclient_cert_pem, Rsa::KEY_TYPE_PUBLIC);
+
+            // 检查通知时间偏移量，允许5分钟之内的偏移
+            $timeOffsetStatus = 300 >= abs(Formatter::timestamp() - (int)$inWechatpayTimestamp);
+            $verifiedStatus = Rsa::verify(
+                // 构造验签名串
+                Formatter::joinedByLineFeed($inWechatpayTimestamp, $inWechatpayNonce, $inBody),
+                $inWechatpaySignature,
+                $platformPublicKeyInstance
+            );
+
+            if (!($timeOffsetStatus && $verifiedStatus)) {
+                return false;
+            }
+        }
+
+        // 转换通知的JSON文本消息为PHP Array数组
+        $inBodyArray = (array)json_decode($inBody, true);
+        // 使用PHP7的数据解构语法，从Array中解构并赋值变量
+        ['resource' => [
+            'ciphertext'      => $ciphertext,
+            'nonce'           => $nonce,
+            'associated_data' => $aad
+        ]] = $inBodyArray;
+
+        // 加密文本消息解密
+        $inBodyResource = AesGcm::decrypt($ciphertext, $apiv3Key, $nonce, $aad);
+
+        // 把解密后的文本转换为PHP Array数组
+        $inBodyResourceArray = (array)json_decode($inBodyResource, true);
+        // print_r($inBodyResourceArray);// 打印解密后的结果
+        return $inBodyResourceArray;
     }
 
     /**
-     * 构造预下单参数
+     * 获取预支付交易会话标识
      *
-     * @author gjw
-     * @created 2023-05-24 14:30:02
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
      *
-     * @param intger $total 支付金额(单位:分)
-     * @param string $out_trade_no 商户系统内部交易号
-     * @param string $description 商品说明
-     * @param string $attach 附加数据
-     * @return void
-     */
-    protected function buildPrepayData($total, $out_trade_no, $description, $attach = '')
-    {
-        $params = array(
-            "mchid" => $this->mchid,
-            "out_trade_no" => $out_trade_no,                           //商户系统内部订单号，只能是数字、大小写字母_-*且在同一个商户号下唯一
-            "time_expire" => $this->makeExpireTime(),
-            "amount" => array(
-                "total" => $total,
-                "currency" => $this->currency,
-            ),
-            "description" => $description,
-            "attach" => $attach,                              //附加数据，在查询API和服务器接收微信服务器发过来的支付通知中原样返回，可作为自定义参数使用
-        );
-
-        //微信应用ID，可以是微信公众号的、也可以是微信小程序的、也可以是其它微信应用的
-        if ($this->app_id) {
-            $params['appid'] = $this->app_id;
-        }
-
-        //微信应用下的用户openid，同一用户在不同微信应用下的openid是不同的
-        if ($this->open_id) {
-            $params['payer']['openid'] = $this->open_id;
-        }
-
-        //异步接收微信支付结果通知的回调地址，通知url必须为外网可访问的url，不能携带参数。 公网域名必须为https，如果是走专线接入，使用专线NAT IP或者私有回调域名可使用http
-        if ($this->notify_url) {
-            $params['notify_url'] = $this->notify_url;
-        }
-
-        return $params;
-    }
-
-    /**
-     * 过期时间
-     * PHP的“date("Y-m-dTH:i:s+08:00")”方法出来的字符串中“T”前面多了“CS”，要替换成空
+     * @param ParameterAbstract $params
      *
-     * @author gjw
-     * @created 2023-05-24 14:27:07
-     *
-     * @param int $$expires 支付超时时长（秒）
-     * 
      * @return string
      */
-    private function makeExpireTime($expires = 3600)
+    public function prepayJsapiPrepayId(ParameterAbstract $params)
     {
-        return str_replace("CS", "", date("Y-m-dTH:i:s+08:00", time() + $expires));
+        $uri = '/v3/pay/transactions/jsapi';
+        $body = $this->buildPrepayParamsArray($params);
+
+        try {
+            $response_content = $this->getClient()->chain($uri)->post($body)->getBody()->getContents();
+            $result = json_decode($response_content, true);
+            $this->setRawResponse($response_content);
+            return $result['prepay_id'];
+        } catch (ClientException $e) {
+            $response_content = $e->getResponse()->getBody()->getContents();
+            $result = json_decode($response_content, true);
+            $this->setRawResponse($response_content);
+            $this->setErrorMessage($result['message']);
+            throw new \Exception('JSAPI请求异常：' . $result['message'], $result['code']);
+        }
+    }
+
+
+    /**
+     * 获取支付发起参数
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @param ParameterAbstract $params
+     *
+     * @return array
+     */
+    public function prepayJsapiParams(ParameterAbstract $params)
+    {
+        $appid = $params->getParamValue('appid');
+        $prepay_id = $this->prepayJsapiPrepayId($params);
+        return $this->buildSignParam($appid, $prepay_id);
+    }
+
+    /**
+     * 构建支付下单参数
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @param ParameterAbstract $params
+     *
+     * @return array
+     */
+    private function buildPrepayParamsArray(ParameterAbstract $params)
+    {
+        // 设置请求头
+        $result = array(
+            'headers' => array('Accept' => 'application/json')
+        );
+
+        // 设置参数
+        $data = $params->toArray();
+        if (!isset($data['notify_url'])) {
+            if ($this->pay_notify_url) {
+                $data['notify_url'] = $this->pay_notify_url;
+            }
+        }
+
+        if (!isset($data['mchid'])) {
+            if ($this->mchid) {
+                $data['mchid'] = $this->mchid;
+            }
+        }
+
+        $result['json'] = $data;
+
+        // 设置代理
+        $proxy = array();
+        if ($this->http_proxy) {
+            $proxy['http_proxy'] = $this->http_proxy;
+        }
+        if ($this->https_proxy) {
+            $proxy['https_proxy'] = $this->https_proxy;
+        }
+        if ($proxy) {
+            $result['proxy'] = $proxy;
+        }
+
+        return $result;
+    }
+
+    /**
+     * 构建退款参数
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-20
+     *
+     * @param ParameterAbstract $params
+     *
+     * @return array
+     */
+    private function buildRefundParamsArray(ParameterAbstract $params)
+    {
+        // 设置请求头
+        $result = array(
+            'headers' => array('Accept' => 'application/json')
+        );
+
+        // 设置参数
+        $data = $params->toArray();
+        if (!isset($data['notify_url'])) {
+            if ($this->refund_notify_url) {
+                $data['notify_url'] = $this->refund_notify_url;
+            }
+        }
+
+        $result['json'] = $data;
+
+        // 设置代理
+        $proxy = array();
+        if ($this->http_proxy) {
+            $proxy['http_proxy'] = $this->http_proxy;
+        }
+        if ($this->https_proxy) {
+            $proxy['https_proxy'] = $this->https_proxy;
+        }
+        if ($proxy) {
+            $result['proxy'] = $proxy;
+        }
+
+        return $result;
     }
 }

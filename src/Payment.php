@@ -5,6 +5,7 @@ namespace Nece\Brawl\Payment\Weixin;
 use Nece\Brawl\ClientAbstract;
 use Nece\Brawl\ConfigAbstract;
 use Nece\Brawl\Payment\PaymentException;
+use Throwable;
 
 /**
  * 微信支付主类
@@ -70,6 +71,11 @@ class Payment extends ClientAbstract
      */
     public function __call($name, $arguments)
     {
-        return $this->client->$name(...$arguments);
+        try {
+            return $this->client->$name(...$arguments);
+        } catch (Throwable $e) {
+            $this->error_message = $this->client->getErrorMessage();
+            throw new PaymentException($e->getMessage());
+        }
     }
 }
