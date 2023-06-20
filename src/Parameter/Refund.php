@@ -4,6 +4,12 @@ namespace Nece\Brawl\Payment\Weixin\Parameter;
 
 use Nece\Brawl\Payment\ParameterAbstract;
 
+/**
+ * 退款参数类
+ *
+ * @Author nece001@163.com
+ * @DateTime 2023-06-20
+ */
 class Refund extends ParameterAbstract
 {
 
