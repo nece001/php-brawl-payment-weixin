@@ -44,8 +44,11 @@ abstract class WeixinPayAbstract implements PaymentInterface
     protected $serial;
     protected $secret_key;
     protected $apiclient_cert_pem;
+    protected $apiclient_cert_pem_file;
     protected $apiclient_key_pem;
+    protected $apiclient_key_pem_file;
     protected $platform_cert_pem;
+    protected $platform_cert_pem_file;
 
     protected $pay_notify_url;
     protected $refund_notify_url;
@@ -131,21 +134,9 @@ abstract class WeixinPayAbstract implements PaymentInterface
         $this->http_proxy = $this->payment->getConfigValue('http_proxy');
         $this->https_proxy = $this->payment->getConfigValue('https_proxy');
 
-        $apiclient_cert_pem = $this->payment->getConfigValue('apiclient_cert_pem');
-        $apiclient_key_pem = $this->payment->getConfigValue('apiclient_key_pem');
-        $platform_cert_pem = $this->payment->getConfigValue('platform_cert_pem');
-
-        if ($apiclient_cert_pem) {
-            $this->apiclient_cert_pem = file_get_contents($apiclient_cert_pem);
-        }
-
-        if ($apiclient_key_pem) {
-            $this->apiclient_key_pem = file_get_contents($apiclient_key_pem);
-        }
-
-        if ($platform_cert_pem) {
-            $this->platform_cert_pem = file_get_contents($platform_cert_pem);
-        }
+        $this->apiclient_cert_pem_file = $this->payment->getConfigValue('apiclient_cert_pem');
+        $this->apiclient_key_pem_file = $this->payment->getConfigValue('apiclient_key_pem');
+        $this->platform_cert_pem_file = $this->payment->getConfigValue('platform_cert_pem');
     }
 
     /**
