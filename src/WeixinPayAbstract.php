@@ -54,6 +54,9 @@ abstract class WeixinPayAbstract implements PaymentInterface
     protected $refund_notify_url;
     protected $http_proxy;
     protected $https_proxy;
+    protected $timeout = 10;
+    protected $connect_timeout = 10;
+    protected $ssl_cert = true;
 
     private $raw_response;
     private $error_message;
@@ -133,6 +136,7 @@ abstract class WeixinPayAbstract implements PaymentInterface
         $this->refund_notify_url = $this->payment->getConfigValue('refund_notify_url');
         $this->http_proxy = $this->payment->getConfigValue('http_proxy');
         $this->https_proxy = $this->payment->getConfigValue('https_proxy');
+        $this->ssl_cert = $this->payment->getConfigValue('ssl_cert');
 
         $this->apiclient_cert_pem_file = $this->payment->getConfigValue('apiclient_cert_pem');
         $this->apiclient_key_pem_file = $this->payment->getConfigValue('apiclient_key_pem');

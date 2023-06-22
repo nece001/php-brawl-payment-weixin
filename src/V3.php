@@ -7,7 +7,9 @@ use GuzzleHttp\Exception\ClientException;
 use Nece\Brawl\Payment\NotifyResponse;
 use Nece\Brawl\Payment\ParameterAbstract;
 use Nece\Brawl\Payment\PaymentException;
+use Nece\Brawl\Payment\Result\PaidNotify;
 use Nece\Brawl\Payment\Result\Refund;
+use Nece\Brawl\Payment\Result\RefundedNotify;
 use WeChatPay\Builder;
 use WeChatPay\Crypto\AesGcm;
 use WeChatPay\Crypto\Rsa;
@@ -90,7 +92,7 @@ class V3 extends WeixinPayAbstract
         try {
             $response_content = $this->getClient()->chain($uri)->post($params)->getBody()->getContents();
             $this->setRawResponse($response_content);
-            return $this->parseRefundResult($response_content);
+            return $response_content;
         } catch (ClientException $e) {
             $response_content = $e->getResponse()->getBody()->getContents();
             $result = json_decode($response_content, true);
@@ -110,7 +112,7 @@ class V3 extends WeixinPayAbstract
      * @param array $headers
      * @param boolean $verify
      *
-     * @return array
+     * @return string
      */
     public function notifyDecode($inBody, array $headers, $verify = true)
     {
@@ -157,9 +159,19 @@ class V3 extends WeixinPayAbstract
         $inBodyResource = AesGcm::decrypt($ciphertext, $apiv3Key, $nonce, $aad);
 
         // 把解密后的文本转换为PHP Array数组
-        $inBodyResourceArray = json_decode($inBodyResource, true);
-        // print_r($inBodyResourceArray);// 打印解密后的结果
-        return $inBodyResourceArray;
+        // $inBodyResourceArray = json_decode($inBodyResource, true);
+        // // print_r($inBodyResourceArray);// 打印解密后的结果
+        // return $inBodyResourceArray;
+
+        $event = array(
+            'id' => $inBodyArray['id'],
+            'create_time' => date('Y-m-d H:i:s', strtotime($inBodyArray['create_time'])),
+            'resource_type' => $inBodyArray['resource_type'],
+            'event_type' => $inBodyArray['event_type'],
+            'summary' => $inBodyArray['summary'],
+        );
+
+        return array('event' => $event, 'resource' => $inBodyResource);
     }
 
     /**
@@ -243,7 +255,9 @@ class V3 extends WeixinPayAbstract
     {
         // 设置请求头
         $result = array(
-            'headers' => array('Accept' => 'application/json')
+            'headers' => array('Accept' => 'application/json'),
+            'decode_content' => true,
+            'verify' => $this->ssl_cert ? $this->ssl_cert : false
         );
 
         // 设置参数
@@ -265,13 +279,20 @@ class V3 extends WeixinPayAbstract
         // 设置代理
         $proxy = array();
         if ($this->http_proxy) {
-            $proxy['http_proxy'] = $this->http_proxy;
+            $proxy['http'] = $this->http_proxy;
         }
         if ($this->https_proxy) {
-            $proxy['https_proxy'] = $this->https_proxy;
+            $proxy['https'] = $this->https_proxy;
         }
         if ($proxy) {
             $result['proxy'] = $proxy;
+        }
+
+        if ($this->timeout) {
+            $result['timeout'] = $this->timeout;
+        }
+        if ($this->connect_timeout) {
+            $result['connect_timeout'] = $this->connect_timeout;
         }
 
         return $result;
@@ -329,71 +350,205 @@ class V3 extends WeixinPayAbstract
      *
      * @return \Nece\Brawl\Payment\ResultAbstract
      */
-    private function parseRefundResult(string $content)
+    public function parseRefundResult(string $content)
     {
         $data = json_decode($content, true);
-        if ($data) {
-            $result = new Refund();
-            $result->setRaw($content);
+        if (!$data) {
+            throw new Exception('微信支付V3.退款结果解析失败：' . json_last_error_msg(), json_last_error());
+        }
 
-            $result->setRefundId($data['refund_id']);
-            $result->setOutRefundNo($data['out_refund_no']);
-            $result->setTansactionId($data['transaction_id']);
-            $result->setOutTradeNo($data['out_trade_no']);
-            $result->setChannel($data['channel']);
-            $result->setUserReceivedAccount($data['user_received_account']);
-            $result->setSuccessTime($data['success_time']);
-            $result->setCreateTime($data['create_time']);
-            $result->setStatus($data['status']);
-            $result->setFundsAccount(isset($data['funds_account']) ? $data['funds_account'] : '');
+        $result = new Refund();
+        $result->setRaw($content);
 
-            $amount = $data['amount'];
-            $result->setAmount(
-                $amount['total'],
-                $amount['refund'],
-                $amount['payer_total'],
-                $amount['payer_refund'],
-                $amount['settlement_refund'],
-                $amount['settlement_total'],
-                $amount['discount_refund'],
-                $amount['currency'],
-                isset($amount['refund_fee']) ? $amount['refund_fee'] : 0
-            );
+        $result->setRefundId($data['refund_id']);
+        $result->setOutRefundNo($data['out_refund_no']);
+        $result->setTansactionId($data['transaction_id']);
+        $result->setOutTradeNo($data['out_trade_no']);
+        $result->setChannel($data['channel']);
+        $result->setUserReceivedAccount($data['user_received_account']);
+        $result->setSuccessTime($data['success_time'] ? date('Y-m-d H:i:s', strtotime($data['success_time'])) : '');
+        $result->setCreateTime(date('Y-m-d H:i:s', strtotime($data['create_time'])));
+        $result->setStatus($data['status']);
+        $result->setFundsAccount(isset($data['funds_account']) ? $data['funds_account'] : '');
 
-            $result->setFrom(
-                isset($amount['from']['account']) ? $amount['from']['account'] : '',
-                isset($amount['from']['amount']) ? $amount['from']['amount'] : 0
-            );
+        $amount = $data['amount'];
 
-            $promotion_detail = isset($data['promotion_detail']) ? $data['promotion_detail'] : array();
-            foreach ($promotion_detail as $detail) {
-                $goods = array();
-                $goods_detail = isset($detail['goods_detail']) ? $detail['goods_detail'] : array();
-                foreach ($goods_detail as $row) {
-                    $goods[] = $result->buildGoodsDetail(
-                        $row['merchant_goods_id'],
-                        $row['unit_price'],
-                        $row['refund_amount'],
-                        $row['refund_quantity'],
-                        $row['goods_name'],
-                        isset($row['wechatpay_goods_id']) ? $row['wechatpay_goods_id'] : '',
-                    );
-                }
+        $from_list = array();
+        foreach ($amount['from'] as $from) {
+            $from_list[] = $result->buildFrom($from['account'], $from['amount']);
+        }
 
-                $result->addPromotionDetail(
-                    isset($detail['promotion_id']) ? $detail['promotion_id'] : '',
-                    isset($detail['scope']) ? $detail['scope'] : '',
-                    isset($detail['type']) ? $detail['type'] : '',
-                    isset($detail['amount']) ? $detail['amount'] : 0,
-                    isset($detail['refund_amount']) ? $detail['refund_amount'] : 0,
-                    $goods
+        $result->setAmount(
+            $amount['total'],
+            $amount['refund'],
+            $amount['payer_total'],
+            $amount['payer_refund'],
+            $amount['settlement_refund'],
+            $amount['settlement_total'],
+            $amount['discount_refund'],
+            $amount['currency'],
+            isset($amount['refund_fee']) ? $amount['refund_fee'] : 0,
+            $from_list
+        );
+
+        $promotion_detail = isset($data['promotion_detail']) ? $data['promotion_detail'] : array();
+        foreach ($promotion_detail as $detail) {
+            $goods = array();
+            $goods_detail = isset($detail['goods_detail']) ? $detail['goods_detail'] : array();
+            foreach ($goods_detail as $row) {
+                $goods[] = $result->buildGoodsDetail(
+                    $row['merchant_goods_id'],
+                    $row['unit_price'],
+                    $row['refund_amount'],
+                    $row['refund_quantity'],
+                    $row['goods_name'],
+                    isset($row['wechatpay_goods_id']) ? $row['wechatpay_goods_id'] : '',
                 );
             }
 
-
-            return $result;
-        } else {
-            throw new Exception(json_last_error_msg(), json_last_error());
+            $result->addPromotionDetail(
+                isset($detail['promotion_id']) ? $detail['promotion_id'] : '',
+                isset($detail['scope']) ? $detail['scope'] : '',
+                isset($detail['type']) ? $detail['type'] : '',
+                isset($detail['amount']) ? $detail['amount'] : 0,
+                isset($detail['refund_amount']) ? $detail['refund_amount'] : 0,
+                $goods
+            );
         }
+
+
+        return $result;
+    }
+
+    /**
+     * 是否支付成功回调通知
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-22
+     *
+     * @param array $event
+     *
+     * @return boolean
+     */
+    public function paidNotifySuccess(array $event)
+    {
+        if (isset($event['event_type'])) {
+            return $event['event_type'] = 'TRANSACTION.SUCCESS';
+        }
+
+        return false;
+    }
+
+    /**
+     * 是否退款成功回调通知
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-22
+     *
+     * @param array $event
+     *
+     * @return void
+     */
+    public function refundedNotifySuccess(array $event)
+    {
+        if (isset($event['event_type'])) {
+            return $event['event_type'] = 'REFUND.SUCCESS';
+        }
+
+        return false;
+    }
+
+    /**
+     * 解析支付成功回调消息
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-22
+     *
+     * @param string $content
+     *
+     * @return \Nece\Brawl\Payment\Result\PaidNotify
+     */
+    public function parsePaidNotifyResult(string $content)
+    {
+        $data = json_decode($content, true);
+        if (!$data) {
+            throw new Exception('微信支付V3.支付通知解析失败：' . json_last_error_msg(), json_last_error());
+        }
+
+        $result = new PaidNotify();
+        $result->setAppId($data['appid']);
+        $result->setMchId($data['mchid']);
+        $result->setOutTradeNo($data['out_trade_no']);
+        $result->setTransactionId($data['transaction_id']);
+        $result->setTradeType($data['trade_type']);
+        $result->setTradeState($data['trade_state']);
+        $result->setTradeStateDesc($data['trade_state_desc']);
+        $result->setBankType($data['bank_type']);
+        $result->setAttach(isset($data['attach']) ? $data['attach'] : '');
+        $result->setSuccessTime($data['success_time'] ? date('Y-m-d H:i:s', strtotime($data['success_time'])) : '');
+        $result->setPayer($data['payer']['openid']);
+
+        $amount = $data['amount'];
+        $result->setAmount($amount['total'], $amount['payer_total'], $amount['currency'], $amount['payer_currency']);
+
+        $result->setSceneInfo(isset($data['scene_info']['device_id']) ? $data['scene_info']['device_id'] : '');
+
+        $promotion_detail = isset($data['promotion_detail']) ? $data['promotion_detail'] : array();
+        foreach ($promotion_detail as $promotion) {
+            $goods_list = array();
+            $goods_detail = isset($promotion['goods_detail']) ? $promotion['goods_detail'] : array();
+            foreach ($goods_detail as $goods) {
+                $goods_list[] = $result->buildGoodsDetail($goods['goods_id'], $goods['quantity'], $goods['unit_price'], $goods['discount_amount'], $goods['goods_remark']);
+            }
+
+            $result->addPromotionDetail(
+                $promotion['coupon_id'],
+                $promotion['amount'],
+                $goods_list,
+                isset($promotion['name']) ? $promotion['name'] : '',
+                isset($promotion['scope']) ? $promotion['scope'] : '',
+                isset($promotion['type']) ? $promotion['type'] : '',
+                isset($promotion['stock_id']) ? $promotion['stock_id'] : '',
+                isset($promotion['wechatpay_contribute']) ? $promotion['wechatpay_contribute'] : 0,
+                isset($promotion['merchant_contribute']) ? $promotion['merchant_contribute'] : 0,
+                isset($promotion['other_contribute']) ? $promotion['other_contribute'] : 0,
+                isset($promotion['currency']) ? $promotion['currency'] : ''
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * 解析退款回调消息
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-06-22
+     *
+     * @param string $content
+     *
+     * @return \Nece\Brawl\Payment\Result\RefundedNotify
+     */
+    public function parseRefundedNotifyResult(string $content)
+    {
+        $data = json_decode($content, true);
+        if (!$data) {
+            throw new Exception('微信支付V3.退款通知解析失败：' . json_last_error_msg(), json_last_error());
+        }
+
+        $result = new RefundedNotify();
+        $result->setMchId($data['mchid']);
+        $result->setOutTradeNo($data['out_trade_no']);
+        $result->setTransactionId($data['transaction_id']);
+        $result->setOutRefundNo($data['out_refund_no']);
+        $result->setRefundId($data['refund_id']);
+        $result->setRefundStatus($data['refund_status']);
+        $result->setSuccessTime($data['success_time'] ? date('Y-m-d H:i:s', strtotime($data['success_time'])) : '');
+        $result->setUserReceivedAccount($data['user_received_account']);
+
+        $amount = $data['amount'];
+        $result->setAmount($amount['total'], $amount['refund'], $amount['payer_total'], $amount['payer_refund']);
+
+        return $result;
     }
 }

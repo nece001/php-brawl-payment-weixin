@@ -21,5 +21,6 @@ class Config extends ConfigAbstract
         $this->addTemplate(false, 'platform_cert_pem', '平台证书', '平台证书文件存放位置（APIV3使用）', '');
         $this->addTemplate(false, 'http_proxy', 'http代理', '例：http://xxx:xxx', '');
         $this->addTemplate(false, 'https_proxy', 'https代理', '例：https://xxx:xxx', '');
+        $this->addTemplate(false, 'ssl_cert', 'SSL证书', '例：/path/to/cert.pem', '');
     }
 }
