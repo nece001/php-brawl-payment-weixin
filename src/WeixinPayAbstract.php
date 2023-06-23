@@ -228,6 +228,9 @@ abstract class WeixinPayAbstract implements PaymentInterface
      */
     protected function md5Sign(array $params)
     {
+        // 去空
+        $params = array_filter($params);
+
         //对参数排序
         $params = Formatter::ksort($params);
         //拼接成网址查询字符串的形式

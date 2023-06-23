@@ -2,14 +2,16 @@
 
 namespace Nece\Brawl\Payment\Weixin;
 
-use Exception;
 use GuzzleHttp\Exception\ClientException;
+use Nece\Brawl\BrawlException;
+use Nece\Brawl\Payment\NotifyEvent;
 use Nece\Brawl\Payment\NotifyResponse;
 use Nece\Brawl\Payment\ParameterAbstract;
 use Nece\Brawl\Payment\PaymentException;
 use Nece\Brawl\Payment\Result\PaidNotify;
 use Nece\Brawl\Payment\Result\Refund;
 use Nece\Brawl\Payment\Result\RefundedNotify;
+use Nece\Brawl\ResultAbstract;
 use WeChatPay\Builder;
 use WeChatPay\Crypto\AesGcm;
 use WeChatPay\Crypto\Rsa;
@@ -69,7 +71,7 @@ class V3 extends WeixinPayAbstract
      *
      * @return array
      */
-    public function prepay(ParameterAbstract $params)
+    public function prepay(ParameterAbstract $params): array
     {
         return $this->prepayJsapiParams($params);
     }
@@ -82,9 +84,9 @@ class V3 extends WeixinPayAbstract
      *
      * @param ParameterAbstract $params
      *
-     * @return void
+     * @return string
      */
-    public function refund(ParameterAbstract $params)
+    public function refund(ParameterAbstract $params): string
     {
         $uri = 'v3/refund/domestic/refunds';
         $params = $this->buildRefundParamsArray($params);
@@ -98,7 +100,7 @@ class V3 extends WeixinPayAbstract
             $result = json_decode($response_content, true);
             $this->setRawResponse($response_content);
             $this->setErrorMessage($result['message']);
-            throw new Exception($result['message'], $result['code']);
+            throw new BrawlException($result['message'], $result['code']);
         }
     }
 
@@ -112,9 +114,9 @@ class V3 extends WeixinPayAbstract
      * @param array $headers
      * @param boolean $verify
      *
-     * @return string
+     * @return NotifyEvent
      */
-    public function notifyDecode($inBody, array $headers, $verify = true)
+    public function notifyDecode($inBody, array $headers, $verify = true): NotifyEvent
     {
         $inWechatpaySignature = $headers["wechatpay-signature"];
         $inWechatpayTimestamp = $headers["wechatpay-timestamp"];
@@ -163,15 +165,15 @@ class V3 extends WeixinPayAbstract
         // // print_r($inBodyResourceArray);// 打印解密后的结果
         // return $inBodyResourceArray;
 
-        $event = array(
-            'id' => $inBodyArray['id'],
-            'create_time' => date('Y-m-d H:i:s', strtotime($inBodyArray['create_time'])),
-            'resource_type' => $inBodyArray['resource_type'],
-            'event_type' => $inBodyArray['event_type'],
-            'summary' => $inBodyArray['summary'],
-        );
+        $event = new NotifyEvent();
+        $event->setId($inBodyArray['id']);
+        $event->setCreateTime(date('Y-m-d H:i:s', strtotime($inBodyArray['create_time'])));
+        $event->setResourceType($inBodyArray['resource_type']);
+        $event->setEventType($inBodyArray['event_type']);
+        $event->setSummary($inBodyArray['summary']);
+        $event->setResource($inBodyResource);
 
-        return array('event' => $event, 'resource' => $inBodyResource);
+        return $event;
     }
 
     /**
@@ -182,7 +184,7 @@ class V3 extends WeixinPayAbstract
      *
      * @return \Nece\Brawl\Payment\NotifyResponse
      */
-    public function notifyResponse()
+    public function notifyResponse(): NotifyResponse
     {
         $content = json_encode(array(
             "code" => "SUCCESS",
@@ -350,11 +352,11 @@ class V3 extends WeixinPayAbstract
      *
      * @return \Nece\Brawl\Payment\ResultAbstract
      */
-    public function parseRefundResult(string $content)
+    public function parseRefundResult(string $content): ResultAbstract
     {
         $data = json_decode($content, true);
         if (!$data) {
-            throw new Exception('微信支付V3.退款结果解析失败：' . json_last_error_msg(), json_last_error());
+            throw new PaymentException('微信支付V3.退款结果解析失败：' . json_last_error_msg(), json_last_error());
         }
 
         $result = new Refund();
@@ -426,17 +428,13 @@ class V3 extends WeixinPayAbstract
      * @Author nece001@163.com
      * @DateTime 2023-06-22
      *
-     * @param array $event
+     * @param NotifyEvent $event
      *
-     * @return boolean
+     * @return bool
      */
-    public function paidNotifySuccess(array $event)
+    public function paidNotifySuccess(NotifyEvent $event): bool
     {
-        if (isset($event['event_type'])) {
-            return $event['event_type'] = 'TRANSACTION.SUCCESS';
-        }
-
-        return false;
+        return $event->getEventType() == 'TRANSACTION.SUCCESS';
     }
 
     /**
@@ -445,17 +443,13 @@ class V3 extends WeixinPayAbstract
      * @Author nece001@163.com
      * @DateTime 2023-06-22
      *
-     * @param array $event
+     * @param NotifyEvent $event
      *
-     * @return void
+     * @return bool
      */
-    public function refundedNotifySuccess(array $event)
+    public function refundedNotifySuccess(NotifyEvent $event): bool
     {
-        if (isset($event['event_type'])) {
-            return $event['event_type'] = 'REFUND.SUCCESS';
-        }
-
-        return false;
+        return $event->getEventType() == 'REFUND.SUCCESS';
     }
 
     /**
@@ -464,15 +458,16 @@ class V3 extends WeixinPayAbstract
      * @Author nece001@163.com
      * @DateTime 2023-06-22
      *
-     * @param string $content
+     * @param NotifyEvent $content
      *
      * @return \Nece\Brawl\Payment\Result\PaidNotify
      */
-    public function parsePaidNotifyResult(string $content)
+    public function parsePaidNotifyResult(NotifyEvent $event): PaidNotify
     {
+        $content = $event->getResource();
         $data = json_decode($content, true);
         if (!$data) {
-            throw new Exception('微信支付V3.支付通知解析失败：' . json_last_error_msg(), json_last_error());
+            throw new PaymentException('微信支付V3.支付通知解析失败：' . json_last_error_msg(), json_last_error());
         }
 
         $result = new PaidNotify();
@@ -525,15 +520,16 @@ class V3 extends WeixinPayAbstract
      * @Author nece001@163.com
      * @DateTime 2023-06-22
      *
-     * @param string $content
+     * @param NotifyEvent $content
      *
      * @return \Nece\Brawl\Payment\Result\RefundedNotify
      */
-    public function parseRefundedNotifyResult(string $content)
+    public function parseRefundedNotifyResult(NotifyEvent $event): RefundedNotify
     {
+        $content = $event->getResource();
         $data = json_decode($content, true);
         if (!$data) {
-            throw new Exception('微信支付V3.退款通知解析失败：' . json_last_error_msg(), json_last_error());
+            throw new PaymentException('微信支付V3.退款通知解析失败：' . json_last_error_msg(), json_last_error());
         }
 
         $result = new RefundedNotify();

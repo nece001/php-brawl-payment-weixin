@@ -16,26 +16,6 @@ abstract class PrepayParameterAbstract extends ParameterAbstract
     protected $store_info = array();
 
     /**
-     * 获取参数值
-     *
-     * @Author nece001@163.com
-     * @DateTime 2023-06-20
-     *
-     * @param string $key
-     * @param mixed $default
-     *
-     * @return mixed
-     */
-    public function getParamValue($key, $default = null)
-    {
-        if (isset($this->params[$key])) {
-            return $this->params[$key];
-        }
-
-        return $default;
-    }
-
-    /**
      * 设置应用ID
      *
      * @Author nece001@163.com
