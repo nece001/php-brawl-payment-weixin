@@ -75,7 +75,7 @@ class Payment extends ClientAbstract
             return $this->client->$name(...$arguments);
         } catch (Throwable $e) {
             $this->error_message = $this->client->getErrorMessage();
-            throw new PaymentException($e->getMessage());
+            throw $e;
         }
     }
 }
