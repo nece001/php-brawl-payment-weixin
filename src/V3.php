@@ -33,22 +33,10 @@ class V3 extends WeixinPayAbstract
     protected function getClient()
     {
         if (!$this->client) {
-            if ($this->apiclient_cert_pem_file) {
-                $this->apiclient_cert_pem = file_get_contents($this->apiclient_cert_pem_file);
-            }
-
-            if ($this->apiclient_key_pem_file) {
-                $this->apiclient_key_pem = file_get_contents($this->apiclient_key_pem_file);
-            }
-
-            if ($this->platform_cert_pem_file) {
-                $this->platform_cert_pem = file_get_contents($this->platform_cert_pem_file);
-            }
-
-            $merchantPrivateKeyInstance = Rsa::from($this->apiclient_key_pem, Rsa::KEY_TYPE_PRIVATE); // 从本地文件中加载「商户API私钥」，「商户API私钥」会用来生成请求的签名
-            $platformCertificateSerial = PemUtil::parseCertificateSerialNo($this->platform_cert_pem); // 从「微信支付平台证书」中获取「证书序列号」
-            $platformPublicKeyInstance = Rsa::from($this->platform_cert_pem, Rsa::KEY_TYPE_PUBLIC); // 从本地文件中加载「微信支付平台证书」，用来验证微信支付应答的签名
-
+            $merchantPrivateKeyInstance = Rsa::from($this->buildFilePath($this->apiclient_key_pem_file_path), Rsa::KEY_TYPE_PRIVATE); // 从本地文件中加载「商户API私钥」，「商户API私钥」会用来生成请求的签名
+            $platformPublicKeyInstance = Rsa::from($this->buildFilePath($this->platform_cert_pem_file_path), Rsa::KEY_TYPE_PUBLIC); // 从本地文件中加载「微信支付平台证书」，用来验证微信支付应答的签名
+            $platformCertificateSerial = PemUtil::parseCertificateSerialNo($this->buildFilePath($this->platform_cert_pem_file_path)); // 从「微信支付平台证书」中获取「证书序列号」
+            
             $this->client = Builder::factory([
                 'mchid'      => $this->mchid,
                 'serial'     => $this->serial,
@@ -110,68 +98,53 @@ class V3 extends WeixinPayAbstract
      * @Author nece001@163.com
      * @DateTime 2023-06-20
      *
-     * @param string $content
-     * @param array $headers
-     * @param boolean $verify
+     * @param string $content 通知内容(HTTP请求的body内容)
+     * @param array $headers 请求头(HTTP的请求头)
+     * @param boolean $verify 是否验证签名
      *
      * @return NotifyEvent
      */
-    public function notifyDecode($inBody, array $headers, $verify = true): NotifyEvent
+    public function notifyDecode($content, array $headers, $verify = true): NotifyEvent
     {
-        $inWechatpaySignature = $headers["wechatpay-signature"];
-        $inWechatpayTimestamp = $headers["wechatpay-timestamp"];
-        $inWechatpaySerial = $headers["wechatpay-serial"];
-        $inWechatpayNonce = $headers["wechatpay-nonce"];
-
-        $apiv3Key = $this->secret_key; // 在商户平台上设置的APIv3密钥
+        $signature = $headers["wechatpay-signature"];
+        $timestamp = intval($headers["wechatpay-timestamp"]);
+        $nonce = $headers["wechatpay-nonce"];
 
         if ($verify) {
-
-            // 根据通知的平台证书序列号，查询本地平台证书文件，
-            $platformPublicKeyInstance = Rsa::from($this->apiclient_cert_pem, Rsa::KEY_TYPE_PUBLIC);
-
+            $verifiedStatus = false;
             // 检查通知时间偏移量，允许5分钟之内的偏移
-            $timeOffsetStatus = 300 >= abs(Formatter::timestamp() - (int)$inWechatpayTimestamp);
-            $verifiedStatus = Rsa::verify(
-                // 构造验签名串
-                Formatter::joinedByLineFeed($inWechatpayTimestamp, $inWechatpayNonce, $inBody),
-                $inWechatpaySignature,
-                $platformPublicKeyInstance
-            );
+            $timeOffsetStatus = 300 >= abs(Formatter::timestamp() - $timestamp);
+            if ($timeOffsetStatus) {
+                // 根据通知的平台证书序列号，查询本地平台证书文件，
+                $platformPublicKeyInstance = Rsa::from($this->buildFilePath($this->apiclient_cert_pem_file_path), Rsa::KEY_TYPE_PUBLIC);
+                $verifiedStatus = Rsa::verify(
+                    Formatter::joinedByLineFeed($timestamp, $nonce, $content),
+                    $signature,
+                    $platformPublicKeyInstance
+                );
+            }
 
-            if (!($timeOffsetStatus && $verifiedStatus)) {
+            if (!$verifiedStatus) {
                 throw new PaymentException('无效签名');
             }
         }
 
         // 转换通知的JSON文本消息为PHP Array数组
-        $inBodyArray = json_decode($inBody, true);
-        // 使用PHP7的数据解构语法，从Array中解构并赋值变量
-        // ['resource' => [
-        //     'ciphertext'      => $ciphertext,
-        //     'nonce'           => $nonce,
-        //     'associated_data' => $aad
-        // ]] = $inBodyArray;
-
-        $ciphertext = $inBodyArray['resource']['ciphertext'];
-        $nonce = $inBodyArray['resource']['nonce'];
-        $aad = $inBodyArray['resource']['associated_data'];
+        $result = json_decode($content, true);
+        $ciphertext = $result['resource']['ciphertext'];
+        $nonce = $result['resource']['nonce'];
+        $aad = $result['resource']['associated_data'];
 
         // 加密文本消息解密
-        $inBodyResource = AesGcm::decrypt($ciphertext, $apiv3Key, $nonce, $aad);
-
-        // 把解密后的文本转换为PHP Array数组
-        // $inBodyResourceArray = json_decode($inBodyResource, true);
-        // // print_r($inBodyResourceArray);// 打印解密后的结果
-        // return $inBodyResourceArray;
+        $resource = AesGcm::decrypt($ciphertext, $this->secret_key, $nonce, $aad);
 
         $event = new NotifyEvent();
-        $event->setId($inBodyArray['id']);
-        $event->setCreateTime(date('Y-m-d H:i:s', strtotime($inBodyArray['create_time'])));
-        $event->setResourceType($inBodyArray['resource_type']);
-        $event->setEventType($inBodyArray['event_type']);
-        $event->setSummary($inBodyArray['summary']);
-        $event->setResource($inBodyResource);
+        $event->setId($result['id']);
+        $event->setCreateTime(date('Y-m-d H:i:s', strtotime($result['create_time'])));
+        $event->setResourceType($result['resource_type']);
+        $event->setEventType($result['event_type']);
+        $event->setSummary($result['summary']);
+        $event->setResource($resource);
 
         return $event;
     }
@@ -240,7 +213,7 @@ class V3 extends WeixinPayAbstract
     {
         $appid = $params->getParamValue('appid');
         $prepay_id = $this->prepayJsapiPrepayId($params);
-        return $this->buildSignParam($appid, $prepay_id);
+        return $this->buildSignParam($appid, $prepay_id, 'RSA');
     }
 
     /**
@@ -546,5 +519,42 @@ class V3 extends WeixinPayAbstract
         $result->setAmount($amount['total'], $amount['refund'], $amount['payer_total'], $amount['payer_refund']);
 
         return $result;
+    }
+
+    /**
+     * 使用RSA方式签名（V3只能用RSA方式）
+     * 
+     * @Author nece001@163.com
+     * @DateTime 2023-06-22
+     * 
+     * @param array $params 需要被签名的参数数组
+     * @param string $sign_type
+     * 
+     * @return string
+     */
+    protected function sign(array $params, $sign_type)
+    {
+        //构造签名串 [appId,时间戳,随机字符串,与支付交易单号，以上述顺序每行一个字符串，每行以'\n'换行，最后一行也要'\n']
+        $signStr = Formatter::joinedByLineFeed($params['appId'], $params['timeStamp'], $params['nonceStr'], $params['package']);
+
+        //使用商户私钥构建一个RSA实例
+        $merchantprotectedKeyInstance = Rsa::from($this->buildFilePath($this->apiclient_key_pem_file_path), Rsa::KEY_TYPE_PRIVATE);
+        //开始签名
+        return Rsa::sign($signStr, $merchantprotectedKeyInstance);
+    }
+
+    /**
+     * 构建文件路径
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-07-22
+     *
+     * @param string $path
+     *
+     * @return string
+     */
+    private function buildFilePath($path)
+    {
+        return 'file://' . $path;
     }
 }

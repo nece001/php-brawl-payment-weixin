@@ -269,22 +269,22 @@ class V2 extends WeixinPayAbstract
         $result->setAttach(isset($data['attach']) ? $data['attach'] : '');
         $result->setSuccessTime($this->formatTime($data['time_end']));
         $result->setPayer($data['openid']);
-        
+
         $fee_type = isset($data['fee_type']) ? $data['fee_type'] : 'CNY';
         $result->setAmount($data['total_fee'], $data['total_fee'], $fee_type, $fee_type);
         $result->setSceneInfo(isset($data['device_info']) ? $data['device_info'] : '');
 
         $coupon_count = isset($data['coupon_count']) ? $data['coupon_count'] : 0;
-        if($coupon_count){
-            for($i=0;$i<$coupon_count;$i++){
-                $coupon_id = $data['coupon_id_'.$i];
-                $coupon_type = $data['coupon_type_'.$i];
-                $coupon_fee = $data['coupon_fee_'.$i];
+        if ($coupon_count) {
+            for ($i = 0; $i < $coupon_count; $i++) {
+                $coupon_id = $data['coupon_id_' . $i];
+                $coupon_type = $data['coupon_type_' . $i];
+                $coupon_fee = $data['coupon_fee_' . $i];
 
                 $result->addPromotionDetail($coupon_id, $coupon_fee, array(), '', '', $coupon_type);
             }
         }
-        
+
         return $result;
     }
 
@@ -341,7 +341,7 @@ class V2 extends WeixinPayAbstract
         $uri = '/pay/unifiedorder';
         $data = $this->buildPrepayParamsArray($params);
 
-        $response_content = $this->curlPost($uri, Transformer::toXml($data['xml']), $data['headers']);
+        $response_content = $this->prepayRequest($uri, Transformer::toXml($data['xml']), $data['headers']);
         $this->setRawResponse($response_content);
         $result = Transformer::toArray($response_content);
 
@@ -372,7 +372,7 @@ class V2 extends WeixinPayAbstract
     {
         $data = array(
             'trade_type' => 'JSAPI',
-            'sign_type' => 'MD5',
+            'sign_type' => 'HMAC-SHA256',
             'nonce_str' => Formatter::nonce(),
             'mch_id' => $params->getParamValue('mchid'),
             // 'partner_trade_no' => $params->getParamValue('out_trade_no'),
@@ -400,7 +400,7 @@ class V2 extends WeixinPayAbstract
             // $data['mchid'] = $this->mchid;
         }
 
-        $data["sign"] = $this->md5Sign($data);
+        $data["sign"] = $this->sign($data, $data['sign_type']);
 
         $result = array(
             'headers' => array('content-type' => 'application/xml'),
@@ -411,33 +411,45 @@ class V2 extends WeixinPayAbstract
             // 'debug' => true //开启调试模式
         );
 
-        // 设置代理
-        $proxy = array();
-        if ($this->http_proxy) {
-            $proxy['http'] = $this->http_proxy;
-        }
-
-        if ($this->https_proxy) {
-            $proxy['https'] = $this->https_proxy;
-        }
-
-        if ($proxy) {
-            $result['proxy'] = $proxy;
-        }
-
-        if ($this->timeout) {
-            $result['timeout'] = $this->timeout;
-        }
-
-        if ($this->connect_timeout) {
-            $result['connect_timeout'] = $this->connect_timeout;
-        }
-
-        $result[RequestOptions::CERT] = $this->apiclient_cert_pem_file;
-        $result[RequestOptions::SSL_KEY] = $this->apiclient_key_pem_file;
-
-        // print_r($result);exit;
         return $result;
+    }
+
+    /**
+     * @param $uri :访问的API接口地址
+     * @param $data :通过POST传递的数据,xml格式
+     * @return bool|string :返回数据
+     */
+    public function prepayRequest($uri, $data)
+    {
+        $url = $this->base_url . $uri;
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HEADER, 0);
+
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $this->timeout);
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+        $this->setProxy($ch);
+
+        // 运行curl
+        $data = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $errno = curl_errno($ch);
+        curl_close($ch);
+
+        if ($errno) {
+            throw new PaymentException(curl_strerror($errno), $errno);
+        }
+
+        if ($status != '200') {
+            throw new PaymentException(curl_strerror($errno), $errno);
+        }
+
+        return $data;
     }
 
     /**
@@ -464,14 +476,15 @@ class V2 extends WeixinPayAbstract
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_SSLCERT, $this->apiclient_cert_pem);
-        curl_setopt($ch, CURLOPT_SSLKEY, $this->apiclient_key_pem);
+        curl_setopt($ch, CURLOPT_SSLCERT, $this->apiclient_cert_pem_file_path);
+        curl_setopt($ch, CURLOPT_SSLKEY, $this->apiclient_key_pem_file_path);
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
 
         if ($headers) {
             curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         }
+        $this->setProxy($ch);
 
         // 运行curl
         $data = curl_exec($ch);
@@ -488,6 +501,35 @@ class V2 extends WeixinPayAbstract
         }
 
         return $data;
+    }
+
+    /**
+     * 设置代理
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-07-22
+     *
+     * @param \CurlHandle $ch
+     *
+     * @return void
+     */
+    private function setProxy($ch)
+    {
+        $proxy = '';
+        if ($this->http_proxy) {
+            if (false !== $pos = strpos($this->http_proxy, '://')) {
+                $proxy = substr($this->http_proxy, $pos + 4);
+            }
+        }
+        if ($this->https_proxy) {
+            if (false !== $pos = strpos($this->https_proxy, '://')) {
+                $proxy = substr($this->https_proxy, $pos + 4);
+            }
+        }
+
+        curl_setopt($ch, CURLOPT_PROXY, $proxy);
+        // curl_setopt($ch, CURLOPT_PROXYPORT, "代理端口");
+        // curl_setopt($ch, CURLOPT_PROXYUSERPWD, "代理用户:代理密码");
     }
 
     /**
@@ -508,5 +550,79 @@ class V2 extends WeixinPayAbstract
         }
 
         return $default;
+    }
+
+    /**
+     * 生成签名
+     *
+     * @Author nece001@163.com
+     * @DateTime 2023-07-22
+     *
+     * @param array $params
+     * @param string $sign_type
+     *
+     * @return string
+     */
+    protected function sign(array $params, $sign_type)
+    {
+        $sign_type = strtoupper($sign_type);
+        if ($sign_type == 'HMAC-SHA256') {
+            return $this->hmacSha256Sign($params);
+        } elseif ($sign_type == 'MD5') {
+            return $this->md5Sign($params);
+        } else {
+            throw new PaymentException('不支持的签名加密方式');
+        }
+    }
+
+    /**
+     * 使用hmac_sha256方式签名
+     * 
+     * @author gjw
+     * @created 2023-05-24 17:00:09
+     * 
+     * @param array $params 需要被签名的参数数组
+     * @return array 参数数组，里面增加了一个签名字段
+     */
+    protected function hmacSha256Sign(array $params)
+    {
+        //对参数排序
+        $params = Formatter::ksort($params);
+        //拼接成网址查询字符串的形式
+        $paramsStr = Formatter::queryStringLike($params);
+        //末尾要带上key
+        $paramsStr .= "&key=" . $this->secret_key;
+
+        //开始签名
+        //这个类在命名空间WeChatPay\Crypto\Hash里面，但它签名出来是不正确的，千万不要用
+        // $signed = Hash::sign("HMAC-SHA256", $paramsStr, $this->secret_key);
+        //用PHP自带的HMAC_SHA256算法生成签名
+        $signed = hash_hmac("sha256", $paramsStr, $this->secret_key);
+        //然后签名要转换成大写
+        return strtoupper($signed);
+    }
+
+    /**
+     * 生成签名
+     *
+     * @author gjw
+     * @created 2023-05-24 17:00:09
+     *
+     * @param array $params
+     * @return string
+     */
+    protected function md5Sign(array $params)
+    {
+        // 去空
+        $params = array_filter($params);
+
+        //对参数排序
+        $params = Formatter::ksort($params);
+        //拼接成网址查询字符串的形式
+        $paramsStr = Formatter::queryStringLike($params);
+        //末尾要带上key
+        $paramsStr .= "&key=" . $this->secret_key;
+
+        return strtoupper(md5($paramsStr));
     }
 }
