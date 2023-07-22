@@ -468,9 +468,6 @@ class V2 extends WeixinPayAbstract
 
         // 初始化curl
         $ch = curl_init();
-        // 这里设置代理，如果有的话
-        // curl_setopt($ch,CURLOPT_PROXY, '8.8.8.8');
-        // curl_setopt($ch,CURLOPT_PROXYPORT, 8080);
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);

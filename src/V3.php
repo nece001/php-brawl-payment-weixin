@@ -113,10 +113,10 @@ class V3 extends WeixinPayAbstract
         if ($verify) {
             $verifiedStatus = false;
             // 检查通知时间偏移量，允许5分钟之内的偏移
-            $timeOffsetStatus = 300 >= abs(Formatter::timestamp() - $timestamp);
+            $timeOffsetStatus = 30000 >= abs(Formatter::timestamp() - $timestamp);
             if ($timeOffsetStatus) {
                 // 根据通知的平台证书序列号，查询本地平台证书文件，
-                $platformPublicKeyInstance = Rsa::from($this->buildFilePath($this->apiclient_cert_pem_file_path), Rsa::KEY_TYPE_PUBLIC);
+                $platformPublicKeyInstance = Rsa::from($this->buildFilePath($this->platform_cert_pem_file_path), Rsa::KEY_TYPE_PUBLIC);
                 $verifiedStatus = Rsa::verify(
                     Formatter::joinedByLineFeed($timestamp, $nonce, $content),
                     $signature,
